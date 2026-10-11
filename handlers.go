@@ -22,6 +22,7 @@ const (
 	settingsResourcePath  = "/v0/resource/plugins/key-provider-access/settings"
 	profileMatchWarning   = "profile_match_failed"
 	selectedDeniedWarning = "selected_profile_denied"
+	legacyUnverified      = "legacy_rule_unverified"
 )
 
 func interceptRequest(raw []byte, afterAuth bool) ([]byte, error) {
@@ -53,7 +54,14 @@ func interceptRequest(raw []byte, afterAuth bool) ([]byte, error) {
 	if profile == "" {
 		return terminatedPolicyResponse(http.StatusForbidden, "selected profile is unavailable for policy evaluation")
 	}
-	if !policyAllowsCandidateWithLegacy(policy, profile, "", globalState.legacyAlias(scope, profile)) {
+	legacy, evaluated := globalState.legacyAlias(scope, profile)
+	// CPA Home mode or another scheduler plugin may skip pickProfile; a legacy
+	// deny for this profile would then go unchecked, so fail closed instead.
+	if !evaluated && unverifiedLegacyDeny(policy, profile) {
+		globalState.recordDenial(legacyUnverified, scope, "", req.Model, []string{profile})
+		return terminatedPolicyResponse(http.StatusForbidden, "profile access cannot be verified for this API key")
+	}
+	if !policyAllowsCandidateWithLegacy(policy, profile, "", legacy) {
 		globalState.recordDenial(selectedDeniedWarning, scope, "", req.Model, []string{profile})
 		// The selected profile ID stays out of the downstream body; operators see it in status and logs.
 		return terminatedPolicyResponse(http.StatusForbidden, "profile is not allowed for this API key")

@@ -137,7 +137,7 @@ func (s *state) rememberLegacyAlias(scope, current, legacy string) {
 	scope = strings.TrimSpace(scope)
 	current = strings.TrimSpace(current)
 	legacy = strings.TrimSpace(legacy)
-	if scope == "" || current == "" || legacy == "" {
+	if scope == "" || current == "" {
 		return
 	}
 	s.mu.Lock()
@@ -151,10 +151,13 @@ func (s *state) rememberLegacyAlias(scope, current, legacy string) {
 	s.legacyAliases[scope][current] = legacy
 }
 
-func (s *state) legacyAlias(scope, current string) string {
+// legacyAlias reports the legacy ID the scheduler derived for a profile and
+// whether the scheduler evaluated that profile for the caller at all.
+func (s *state) legacyAlias(scope, current string) (string, bool) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	return s.legacyAliases[strings.TrimSpace(scope)][strings.TrimSpace(current)]
+	legacy, evaluated := s.legacyAliases[strings.TrimSpace(scope)][strings.TrimSpace(current)]
+	return legacy, evaluated
 }
 
 func (s *state) setHostSchema(schema uint32) {
@@ -179,6 +182,7 @@ func (s *state) recordDenial(code, scope, provider, model string, offered []stri
 	for _, id := range offered {
 		masked = append(masked, maskProfileIdentity(strings.TrimSpace(id)))
 	}
+	model = boundedModel(model)
 	key := scope + "\x00" + provider + "\x00" + model
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -206,18 +210,27 @@ func scopeFingerprint(scope string) string {
 	return scope[:10] + "…" + scope[len(scope)-6:]
 }
 
-// maskProfileIdentity hides the local part of an email embedded in an OAuth
-// profile ID so denial logs carry no account identity.
+// maskProfileIdentity hides everything between the last ':' and '@' of an
+// OAuth profile ID so denial logs carry no account identity.
 func maskProfileIdentity(id string) string {
 	at := strings.Index(id, "@")
-	if at <= 0 {
+	if at < 0 {
 		return id
 	}
-	start := strings.LastIndexAny(id[:at], ":/_ ") + 1
-	if at-start <= 1 {
-		return id
+	start := strings.LastIndex(id[:at], ":") + 1
+	return id[:start] + "***" + id[at:]
+}
+
+// maxModelKeyLength bounds caller-controlled model names kept in per-model
+// maps and logs.
+const maxModelKeyLength = 128
+
+func boundedModel(model string) string {
+	model = strings.TrimSpace(model)
+	if len(model) > maxModelKeyLength {
+		return model[:maxModelKeyLength] + "…"
 	}
-	return id[:start+1] + "***" + id[at:]
+	return model
 }
 
 func (s *state) failClosedOrPreserve(cfg pluginConfig, schema uint32, cause error) {
@@ -485,9 +498,7 @@ func legacyAPIKeyProfileID(candidate schedulerAuthCandidate) string {
 		return ""
 	}
 	kind := profile[:separator]
-	switch kind {
-	case "gemini:apikey", "gemini-interactions:apikey", "claude:apikey", "codex:apikey", "xai:apikey":
-	default:
+	if !legacyCapableKind(kind) {
 		return ""
 	}
 	key := strings.TrimSpace(candidate.Attributes["api_key"])
@@ -505,14 +516,41 @@ func legacyAPIKeyProfileID(candidate schedulerAuthCandidate) string {
 	return kind + ":" + digest[:12]
 }
 
+func legacyCapableKind(kind string) bool {
+	switch kind {
+	case "gemini:apikey", "gemini-interactions:apikey", "claude:apikey", "codex:apikey", "xai:apikey":
+		return true
+	}
+	return false
+}
+
+// unverifiedLegacyDeny reports whether a profile the scheduler never evaluated
+// could be the target of a legacy-format exact deny rule. Without the
+// scheduler's transient credential attributes that rule cannot be checked.
+func unverifiedLegacyDeny(policy runtimePolicy, profile string) bool {
+	separator := strings.LastIndex(profile, ":")
+	if separator <= 0 || !legacyCapableKind(profile[:separator]) {
+		return false
+	}
+	prefix := profile[:separator+1]
+	for _, rule := range policy.DenyProfiles {
+		if rule != profile && strings.HasPrefix(rule, prefix) && !strings.ContainsAny(rule, "*?") {
+			return true
+		}
+	}
+	return false
+}
+
 func (s *state) nextProfile(scope, provider, model string, candidates []schedulerAuthCandidate) string {
 	if len(candidates) == 0 {
 		return ""
 	}
-	key := scope + "\x00" + strings.ToLower(strings.TrimSpace(provider)) + "\x00" + strings.TrimSpace(model)
+	key := scope + "\x00" + strings.ToLower(strings.TrimSpace(provider)) + "\x00" + boundedModel(model)
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if s.pickCursor == nil {
+	// ponytail: resetting all cursors only restarts round-robin positions; switch
+	// to an LRU if fair rotation across many distinct models ever matters.
+	if s.pickCursor == nil || len(s.pickCursor) >= maxTrackedDenials {
 		s.pickCursor = make(map[string]uint64)
 	}
 	cursor := s.pickCursor[key]

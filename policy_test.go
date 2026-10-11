@@ -274,7 +274,7 @@ func TestDenialWarningPersistsUntilPolicyReplace(t *testing.T) {
 	if warning != profileMatchWarning {
 		t.Fatalf("successful pick cleared denial warning, got %q", warning)
 	}
-	for _, want := range []string{scopeA[:10], `"gemini-pro"`, "g***@example.com.json", "count 1"} {
+	for _, want := range []string{scopeA[:10], `"gemini-pro"`, "***@example.com.json", "count 1"} {
 		if !strings.Contains(detail, want) {
 			t.Fatalf("denial detail %q missing %q", detail, want)
 		}
@@ -805,5 +805,62 @@ func unwrapEnvelope(t *testing.T, raw []byte, target any) {
 	}
 	if err := json.Unmarshal(wrapped.Result, target); err != nil {
 		t.Fatalf("unmarshal result: %v", err)
+	}
+}
+
+func TestMaskProfileIdentityHidesWholeLocalPart(t *testing.T) {
+	for input, want := range map[string]string{
+		"codex-alice_b@example.com.json": "***@example.com.json",
+		"codex:oauth:bob@x.io":           "codex:oauth:***@x.io",
+		"openai-compatibility:ds:abc123": "openai-compatibility:ds:abc123",
+	} {
+		if got := maskProfileIdentity(input); got != want {
+			t.Fatalf("maskProfileIdentity(%q) = %q, want %q", input, got, want)
+		}
+	}
+}
+
+func TestAfterAuthFailsClosedOnUnverifiedLegacyDeny(t *testing.T) {
+	installTestPolicy(t, policyDocument{Version: 2, Policies: []policyConfig{{
+		CallerScope: scopeA, DenyProfiles: []string{"codex:apikey:aaaaaaaaaaaa"},
+	}}})
+	// Without a scheduler pick (CPA Home mode) the legacy deny cannot be evaluated.
+	denied := callIntercept(t, requestInterceptRequest{Metadata: map[string]any{
+		"caller_scope": scopeA, "selected_auth_id": "codex:apikey:bbbbbbbbbbbb",
+	}})
+	if !denied.Terminate || denied.StatusCode != http.StatusForbidden {
+		t.Fatalf("unverified legacy deny was allowed: %#v", denied)
+	}
+
+	request := schedulerPickRequest{
+		Provider: "codex",
+		Options:  schedulerOptions{Metadata: map[string]any{"caller_scope": scopeA}},
+		Candidates: []schedulerAuthCandidate{{
+			ID: "codex:apikey:bbbbbbbbbbbb", Provider: "codex",
+			Attributes: map[string]string{"api_key": "k", "base_url": "https://example.com"},
+		}},
+	}
+	rawRequest, _ := json.Marshal(request)
+	if _, err := pickProfile(rawRequest); err != nil {
+		t.Fatal(err)
+	}
+	allowed := callIntercept(t, requestInterceptRequest{Metadata: map[string]any{
+		"caller_scope": scopeA, "selected_auth_id": "codex:apikey:bbbbbbbbbbbb",
+	}})
+	if allowed.Terminate {
+		t.Fatalf("scheduler-evaluated profile was rejected: %#v", allowed)
+	}
+}
+
+func TestDenialDetailBoundsModelLength(t *testing.T) {
+	installTestPolicy(t, policyDocument{Version: 2, Policies: []policyConfig{{
+		CallerScope: scopeA, AllowProfiles: []string{"x"},
+	}}})
+	globalState.recordDenial(profileMatchWarning, scopeA, "p", strings.Repeat("m", 1<<20), nil)
+	globalState.mu.RLock()
+	detail := globalState.runtimeWarningDetail
+	globalState.mu.RUnlock()
+	if len(detail) > 1024 {
+		t.Fatalf("denial detail kept %d bytes of caller-controlled model", len(detail))
 	}
 }
