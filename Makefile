@@ -1,5 +1,5 @@
 PLUGIN_NAME ?= key-provider-access
-VERSION ?= 0.0.6
+VERSION ?= 0.0.7
 BUILD_DIR ?= dist
 GOOS ?= $(shell go env GOOS)
 GOARCH ?= $(shell go env GOARCH)
