@@ -21,9 +21,14 @@ Profiles include both OAuth credentials and API-key-backed providers. Policies s
   on the dashboard overview with the key fingerprint, provider, model, offered profile IDs (emails
   masked), count, and time. It stays until the policy is saved or reloaded. The first denial for
   each key, provider, and model combination is also written to the CPA process log.
-- The dashboard never adds new profiles to an allow list. A key whose allowed profiles have all
-  disappeared from the catalog keeps its stale rules, so it stays denied, and the dashboard flags it
-  until the operator picks the replacement profiles.
+- The dashboard never adds, removes, or restores rules on its own. Rules whose profiles are missing
+  from the catalog stay in the policy and are counted in a notice; a key whose allowed profiles
+  have all disappeared stays denied and is flagged until the operator picks replacements.
+- Removing a key's last allowed profile in the dashboard sets `deny_profiles = ["*"]` instead of
+  leaving an empty allow list, which would mean allow-all.
+- If the after-auth check sees a legacy-capable API-key profile that this plugin's scheduler never
+  evaluated (CPA Home mode or another active scheduler plugin) and the key has exact deny rules of
+  the same kind, the request is denied because a legacy-format deny cannot be verified.
 - Legacy Gemini, Gemini Interactions, Claude, Codex, and xAI API-key profile IDs from CPA's
   pre-v7.2.146 format are matched against current candidates using transient attributes. This
   preserves existing allow/deny rules across CPA's ID-format change without persisting credentials

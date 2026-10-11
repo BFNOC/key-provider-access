@@ -49,7 +49,6 @@
     profilesError: "",
     persistenceSetupError: "",
     stalePolicies: [],
-    profileCache: {},
     reconcileNotice: "",
     revision: 0,
     selectedIndex: -1,
@@ -144,6 +143,7 @@
     ["最近的策略拒绝：", "Recent policy denial:"],
     ["未连接", "Disconnected"],
     ["插件运行正常", "Plugin is healthy"],
+    ["最近一次被拒绝的请求所选上游配置未经调度器评估，且该 Key 有同类精确拒绝规则无法核验。请确认本插件是生效的调度器，或改用当前上游配置 ID。", "The most recent denied request selected a profile the scheduler never evaluated, and that key has exact deny rules of the same kind that cannot be verified. Make sure this plugin is the active scheduler, or switch to current profile IDs."],
     ["最近一次被拒绝的请求没有匹配到该 Key 当前允许的上游配置。如果访问仍然失败，请刷新上游配置目录并检查该 Key 的规则。", "The most recent denied request matched no provider currently allowed for that key. If access is still failing, refresh the provider catalog and review that key's rules."],
     ["最近一次被拒绝的请求所选上游配置不在该 Key 的允许范围内。如果访问仍然失败，请刷新上游配置目录并检查该 Key 的规则。", "The provider selected for the most recent denied request was not allowed for that key. If access is still failing, refresh the provider catalog and review that key's rules."],
     ["检测到最近一次上游配置策略拒绝。如果访问仍然失败，请刷新上游配置目录并检查该 Key 的规则。", "A recent provider-policy denial was detected. If access is still failing, refresh the provider catalog and review that key's rules."],
@@ -236,19 +236,6 @@
     return SUPPORTED_LANGUAGES.has(normalized) ? normalized : "en";
   }
 
-  function loadProfileCache() {
-    try {
-      const parsed = JSON.parse(localStorage.getItem(PROFILE_CACHE_KEY) || "{}");
-      return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed : {};
-    } catch (_) {
-      return {};
-    }
-  }
-
-  function saveProfileCache() {
-    try { localStorage.setItem(PROFILE_CACHE_KEY, JSON.stringify(state.profileCache)); } catch (_) { /* cache is optional */ }
-  }
-
   function translateText(value) {
     let text = String(value ?? "");
     if (currentLanguage === "zh-CN") {
@@ -273,12 +260,11 @@
       .replace(/^点击将取消(.+)匹配$/, "Click to cancel the $1 match")
       .replace(/^当前匹配 (\d+) 个上游配置，并覆盖未来同前缀上游配置$/, "Matches $1 providers and future providers with the same prefix")
       .replace(/^已保留 (\d+) 条现有规则$/, "$1 existing rules retained")
-      .replace(/^(?:(\d+) 个失效上游配置已移入缓存；)?(?:(\d+) 个恢复的上游配置已恢复原规则；)?(?:(\d+) 个 Key 的允许规则已全部失效，已保留旧规则并拒绝其全部请求；)?请检查并保存策略。$/, (_, removed, restored, orphaned) => {
+      .replace(/^(?:(\d+) 条规则引用的上游配置已不在目录中；)?(?:(\d+) 个 Key 的允许规则已全部失效，其请求将全部被拒绝；)?请检查并为这些 Key 重新选择上游配置。$/, (_, stale, orphaned) => {
         const parts = [];
-        if (removed) parts.push(`${removed} stale profiles moved to cache`);
-        if (restored) parts.push(`${restored} returning profiles restored from cache`);
-        if (orphaned) parts.push(`${orphaned} keys have no remaining allowed profile; their stale rules are kept and all their requests are denied`);
-        return `${parts.join("; ")}. Review and save the policy.`;
+        if (stale) parts.push(`${stale} rules reference profiles missing from the catalog`);
+        if (orphaned) parts.push(`${orphaned} keys have no allowed profile left, so all their requests are denied`);
+        return `${parts.join("; ")}. Review these keys and pick the replacement profiles.`;
       })
       .replace(/^已匹配 (\d+) \/ (\d+)$/, "Matched $1 / $2")
       .replace(/^(\d+) 条失效策略：$/, "$1 stale policies:")
@@ -755,71 +741,25 @@
       .map((policy) => ({ ...policy, allow_profiles: [...policy.allow_profiles], deny_profiles: [...policy.deny_profiles] }));
   }
 
+  // Rules whose profiles are missing from the catalog stay untouched: a stale
+  // deny may still match a legacy ID or a disabled profile, and dropping a
+  // key's last allow rule would turn it into allow-all. This only reminds the
+  // operator to pick the replacement profiles.
   function reconcileProfilePolicies() {
     if (!state.profiles.length || !state.keys.length) return;
     const current = new Set(state.profiles.map((profile) => String(profile.id || "").trim()).filter(Boolean));
     if (!current.size) return;
-    let removed = 0;
-    let restored = 0;
+    const isStale = (rule) => !String(rule).includes("*") && !String(rule).includes("?") && !current.has(rule);
+    let stale = 0;
     let orphaned = 0;
-    let changed = false;
     for (const key of state.keys) {
-      const cached = state.profileCache[key.scope] && typeof state.profileCache[key.scope] === "object"
-        ? state.profileCache[key.scope]
-        : (state.profileCache[key.scope] = {});
-      for (const side of ["allow_profiles", "deny_profiles"]) {
-        const retained = [];
-        const stale = [];
-        for (const rule of key[side]) {
-          const exact = !String(rule).includes("*") && !String(rule).includes("?");
-          if (exact && !current.has(rule)) stale.push(rule);
-          else retained.push(rule);
-        }
-        // An emptied allow list means "allow every profile", so a key whose
-        // allowed profiles all rotated keeps its stale rules: the backend then
-        // denies all of its requests until the operator picks the new profiles.
-        if (side === "allow_profiles" && stale.length && !retained.length) {
-          orphaned += 1;
-          continue;
-        }
-        for (const rule of stale) {
-          const decision = cached[rule] || {};
-          decision[side === "allow_profiles" ? "allow" : "deny"] = true;
-          cached[rule] = decision;
-          removed += 1;
-          changed = true;
-        }
-        key[side] = retained;
-      }
-      for (const profileID of current) {
-        const hasAllow = key.allow_profiles.some((rule) => profilePatternMatches(rule, profileID));
-        const hasDeny = key.deny_profiles.some((rule) => profilePatternMatches(rule, profileID));
-        const decision = cached[profileID];
-        if (decision && !hasAllow && !hasDeny) {
-          if (decision.allow) key.allow_profiles.push(profileID);
-          if (decision.deny) key.deny_profiles.push(profileID);
-          delete cached[profileID];
-          restored += 1;
-          changed = true;
-        } else if (decision && (hasAllow || hasDeny)) {
-          delete cached[profileID];
-          changed = true;
-        }
-        // New profiles are never added to an allow list automatically: a
-        // rotated ID would otherwise be granted to every allow-listed key.
-      }
-      if (!Object.keys(cached).length) delete state.profileCache[key.scope];
-    }
-    if (!changed && !orphaned) return;
-    if (changed) {
-      saveProfileCache();
-      state.dirty = true;
+      stale += key.allow_profiles.filter(isStale).length + key.deny_profiles.filter(isStale).length;
+      if (key.allow_profiles.length && key.allow_profiles.every(isStale)) orphaned += 1;
     }
     const parts = [];
-    if (removed) parts.push(`${removed} 个失效上游配置已移入缓存`);
-    if (restored) parts.push(`${restored} 个恢复的上游配置已恢复原规则`);
-    if (orphaned) parts.push(`${orphaned} 个 Key 的允许规则已全部失效，已保留旧规则并拒绝其全部请求`);
-    state.reconcileNotice = `${parts.map((part) => `${part}；`).join("")}请检查并保存策略。`;
+    if (stale) parts.push(`${stale} 条规则引用的上游配置已不在目录中`);
+    if (orphaned) parts.push(`${orphaned} 个 Key 的允许规则已全部失效，其请求将全部被拒绝`);
+    if (parts.length) state.reconcileNotice = `${parts.map((part) => `${part}；`).join("")}请检查并为这些 Key 重新选择上游配置。`;
   }
 
   function installRemoteData(remote, preferredScope = "") {
@@ -1049,6 +989,8 @@
     switch (String(code || "").trim()) {
       case "profile_match_failed":
         return "最近一次被拒绝的请求没有匹配到该 Key 当前允许的上游配置。如果访问仍然失败，请刷新上游配置目录并检查该 Key 的规则。";
+      case "legacy_rule_unverified":
+        return "最近一次被拒绝的请求所选上游配置未经调度器评估，且该 Key 有同类精确拒绝规则无法核验。请确认本插件是生效的调度器，或改用当前上游配置 ID。";
       case "selected_profile_denied":
         return "最近一次被拒绝的请求所选上游配置不在该 Key 的允许范围内。如果访问仍然失败，请刷新上游配置目录并检查该 Key 的规则。";
       default:
@@ -1292,6 +1234,11 @@
     } else {
       key[kind] = normalizeProfiles([...current, profileID]);
       key[oppositeKind] = removeConflictingRules(opposite, profileID);
+    }
+    // An empty allow list means allow-all, so removing the last allowed
+    // profile denies everything instead; the operator can drop the deny "*".
+    if (kind === "allow_profiles" && current.length && !key.allow_profiles.length) {
+      key.deny_profiles = ["*"];
     }
     markDirty();
     renderEditor();
@@ -1543,7 +1490,8 @@
   }
 
   function initializeChrome() {
-    state.profileCache = loadProfileCache();
+    // Older versions restored cached grants from here; never read it again.
+    try { localStorage.removeItem(PROFILE_CACHE_KEY); } catch (_) { /* storage is optional */ }
     document.documentElement.classList.toggle("is-embedded", window.self !== window.top);
     $("#searchIcon").innerHTML = icons.search;
     refreshDataButton.innerHTML = icons.refresh;
