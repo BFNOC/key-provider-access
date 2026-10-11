@@ -273,11 +273,11 @@
       .replace(/^点击将取消(.+)匹配$/, "Click to cancel the $1 match")
       .replace(/^当前匹配 (\d+) 个上游配置，并覆盖未来同前缀上游配置$/, "Matches $1 providers and future providers with the same prefix")
       .replace(/^已保留 (\d+) 条现有规则$/, "$1 existing rules retained")
-      .replace(/^(?:(\d+) 个失效上游配置已移入缓存；)?(?:(\d+) 个恢复的上游配置已恢复原规则；)?(?:(\d+) 个新上游配置已自动允许。)?请检查并保存策略。$/, (_, removed, restored, added) => {
+      .replace(/^(?:(\d+) 个失效上游配置已移入缓存；)?(?:(\d+) 个恢复的上游配置已恢复原规则；)?(?:(\d+) 个 Key 的允许规则已全部失效，已保留旧规则并拒绝其全部请求；)?请检查并保存策略。$/, (_, removed, restored, orphaned) => {
         const parts = [];
         if (removed) parts.push(`${removed} stale profiles moved to cache`);
         if (restored) parts.push(`${restored} returning profiles restored from cache`);
-        if (added) parts.push(`${added} new profiles automatically allowed`);
+        if (orphaned) parts.push(`${orphaned} keys have no remaining allowed profile; their stale rules are kept and all their requests are denied`);
         return `${parts.join("; ")}. Review and save the policy.`;
       })
       .replace(/^已匹配 (\d+) \/ (\d+)$/, "Matched $1 / $2")
@@ -761,7 +761,7 @@
     if (!current.size) return;
     let removed = 0;
     let restored = 0;
-    let added = 0;
+    let orphaned = 0;
     let changed = false;
     for (const key of state.keys) {
       const cached = state.profileCache[key.scope] && typeof state.profileCache[key.scope] === "object"
@@ -769,17 +769,25 @@
         : (state.profileCache[key.scope] = {});
       for (const side of ["allow_profiles", "deny_profiles"]) {
         const retained = [];
+        const stale = [];
         for (const rule of key[side]) {
           const exact = !String(rule).includes("*") && !String(rule).includes("?");
-          if (exact && !current.has(rule)) {
-            const decision = cached[rule] || {};
-            decision[side === "allow_profiles" ? "allow" : "deny"] = true;
-            cached[rule] = decision;
-            removed += 1;
-            changed = true;
-          } else {
-            retained.push(rule);
-          }
+          if (exact && !current.has(rule)) stale.push(rule);
+          else retained.push(rule);
+        }
+        // An emptied allow list means "allow every profile", so a key whose
+        // allowed profiles all rotated keeps its stale rules: the backend then
+        // denies all of its requests until the operator picks the new profiles.
+        if (side === "allow_profiles" && stale.length && !retained.length) {
+          orphaned += 1;
+          continue;
+        }
+        for (const rule of stale) {
+          const decision = cached[rule] || {};
+          decision[side === "allow_profiles" ? "allow" : "deny"] = true;
+          cached[rule] = decision;
+          removed += 1;
+          changed = true;
         }
         key[side] = retained;
       }
@@ -796,22 +804,22 @@
         } else if (decision && (hasAllow || hasDeny)) {
           delete cached[profileID];
           changed = true;
-        } else if (!decision && !hasAllow && !hasDeny && key.allow_profiles.length && !key.deny_profiles.some((rule) => profilePatternMatches(rule, profileID))) {
-          key.allow_profiles.push(profileID);
-          added += 1;
-          changed = true;
         }
+        // New profiles are never added to an allow list automatically: a
+        // rotated ID would otherwise be granted to every allow-listed key.
       }
       if (!Object.keys(cached).length) delete state.profileCache[key.scope];
     }
-    if (!changed) return;
-    saveProfileCache();
-    state.dirty = true;
+    if (!changed && !orphaned) return;
+    if (changed) {
+      saveProfileCache();
+      state.dirty = true;
+    }
     const parts = [];
     if (removed) parts.push(`${removed} 个失效上游配置已移入缓存`);
     if (restored) parts.push(`${restored} 个恢复的上游配置已恢复原规则`);
-    if (added) parts.push(`${added} 个新上游配置已自动允许`);
-    state.reconcileNotice = `${parts.join("；")}。请检查并保存策略。`;
+    if (orphaned) parts.push(`${orphaned} 个 Key 的允许规则已全部失效，已保留旧规则并拒绝其全部请求`);
+    state.reconcileNotice = `${parts.map((part) => `${part}；`).join("")}请检查并保存策略。`;
   }
 
   function installRemoteData(remote, preferredScope = "") {
@@ -931,7 +939,7 @@
     const healthy = state.status && !state.status.last_error;
     const warning = state.status?.last_error || state.status?.runtime_warning;
     healthBadge.innerHTML = `<span class="status-dot ${warning ? "warning" : healthy ? "" : "error"}"></span><span>${escapeHTML(warning ? "策略警告" : healthy ? `Schema v${state.status.schema_version || 2}` : "未连接")}</span>`;
-    healthBadge.title = warning ? (state.status.last_error || runtimeWarningText(state.status.runtime_warning)) : "插件运行正常";
+    healthBadge.title = warning ? (state.status.last_error || [runtimeWarningText(state.status.runtime_warning), state.status.runtime_warning_detail].filter(Boolean).join("\n")) : "插件运行正常";
     saveButton.disabled = state.busy || state.profileBusy || !state.dirty;
     reloadButton.disabled = state.busy || state.profileBusy || !state.status?.persistent_updates;
     reloadButton.title = state.status?.persistent_updates ? "从策略文件重载" : "未配置 policy_file，无法从文件重载";
@@ -1057,7 +1065,7 @@
       ? `<div class="notice">${icons.warning}<span><strong>最近一次配置存在问题：</strong> ${escapeHTML(state.status.last_error)}。当前仍在使用最后一个有效策略。</span></div>`
       : "";
     const runtimeWarning = state.status?.runtime_warning
-      ? `<div class="notice">${icons.warning}<span><strong>最近的策略拒绝：</strong> ${escapeHTML(runtimeWarningText(state.status.runtime_warning))}</span></div>`
+      ? `<div class="notice">${icons.warning}<span><strong>最近的策略拒绝：</strong> ${escapeHTML(runtimeWarningText(state.status.runtime_warning))}${state.status.runtime_warning_detail ? `<br><span class="mono">${escapeHTML(state.status.runtime_warning_detail)}</span>` : ""}</span></div>`
       : "";
     const reconcileNotice = state.reconcileNotice
       ? `<div class="notice"><span>${escapeHTML(state.reconcileNotice)}</span></div>`

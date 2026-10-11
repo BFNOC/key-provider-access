@@ -244,45 +244,55 @@ func TestSchedulerUnconfiguredKeyFallsBackAndConfiguredKeyFailsClosed(t *testing
 	}
 }
 
-func TestSuccessfulPolicyEnforcementClearsRuntimeWarning(t *testing.T) {
-	installTestPolicy(t, policyDocument{Version: 2, Policies: []policyConfig{{
+func TestDenialWarningPersistsUntilPolicyReplace(t *testing.T) {
+	document := policyDocument{Version: 2, Policies: []policyConfig{{
 		CallerScope: scopeA, AllowProfiles: []string{"gemini:oauth-allowed"},
-	}}})
-	request := schedulerPickRequest{
+	}}}
+	installTestPolicy(t, document)
+	denied := schedulerPickRequest{
 		Provider: "gemini",
+		Model:    "gemini-pro",
 		Options:  schedulerOptions{Metadata: map[string]any{"caller_scope": scopeA}},
 		Candidates: []schedulerAuthCandidate{{
-			ID: "gemini:oauth-allowed", Provider: "gemini",
+			ID: "gemini-alice@example.com.json", Provider: "gemini",
 		}},
 	}
-	globalState.recordRuntimeWarning(profileMatchWarning)
-	rawRequest, _ := json.Marshal(request)
+	rawRequest, _ := json.Marshal(denied)
+	if _, err := pickProfile(rawRequest); err != nil {
+		t.Fatal(err)
+	}
+
+	allowed := denied
+	allowed.Candidates = []schedulerAuthCandidate{{ID: "gemini:oauth-allowed", Provider: "gemini"}}
+	rawRequest, _ = json.Marshal(allowed)
 	if _, err := pickProfile(rawRequest); err != nil {
 		t.Fatal(err)
 	}
 	globalState.mu.RLock()
-	warning := globalState.runtimeWarning
+	warning, detail := globalState.runtimeWarning, globalState.runtimeWarningDetail
 	globalState.mu.RUnlock()
-	if warning != "" {
-		t.Fatalf("successful scheduler pick retained runtime warning %q", warning)
+	if warning != profileMatchWarning {
+		t.Fatalf("successful pick cleared denial warning, got %q", warning)
+	}
+	for _, want := range []string{scopeA[:10], `"gemini-pro"`, "g***@example.com.json", "count 1"} {
+		if !strings.Contains(detail, want) {
+			t.Fatalf("denial detail %q missing %q", detail, want)
+		}
+	}
+	if strings.Contains(detail, "alice") {
+		t.Fatalf("denial detail leaked account identity: %q", detail)
 	}
 
-	globalState.recordRuntimeWarning(selectedDeniedWarning)
-	allowed := callIntercept(t, requestInterceptRequest{Metadata: map[string]any{
-		"caller_scope": scopeA, "selected_auth_id": "gemini:oauth-allowed",
-	}})
-	if allowed.Terminate {
-		t.Fatalf("allowed after-auth response = %#v", allowed)
-	}
+	installTestPolicy(t, document)
 	globalState.mu.RLock()
-	warning = globalState.runtimeWarning
+	warning, detail = globalState.runtimeWarning, globalState.runtimeWarningDetail
 	globalState.mu.RUnlock()
-	if warning != "" {
-		t.Fatalf("successful after-auth enforcement retained runtime warning %q", warning)
+	if warning != "" || detail != "" {
+		t.Fatalf("policy replace kept warning %q / %q", warning, detail)
 	}
 }
 
-func TestSchedulerTransientlyAdoptsRotatedProfileIDs(t *testing.T) {
+func TestSchedulerRotatedProfileIDFailsClosed(t *testing.T) {
 	installTestPolicy(t, policyDocument{Version: 2, Policies: []policyConfig{{
 		CallerScope: scopeA, AllowProfiles: []string{"gemini:apikey:old-id"},
 	}}})
@@ -296,16 +306,21 @@ func TestSchedulerTransientlyAdoptsRotatedProfileIDs(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	var selected schedulerPickResponse
-	unwrapEnvelope(t, rawResponse, &selected)
-	if !selected.Handled || selected.AuthID != "gemini:apikey:new-id" {
-		t.Fatalf("rotated profile was not adopted: %#v", selected)
+	var wrapped envelope
+	if err := json.Unmarshal(rawResponse, &wrapped); err != nil {
+		t.Fatal(err)
 	}
-	allowed := callIntercept(t, requestInterceptRequest{Metadata: map[string]any{
-		"caller_scope": scopeA, "selected_auth_id": selected.AuthID,
+	if wrapped.OK || wrapped.Error == nil || wrapped.Error.Code != "profile_access_denied" || wrapped.Error.HTTPStatus != http.StatusForbidden {
+		t.Fatalf("rotated profile was adopted instead of denied: %#v", wrapped)
+	}
+	denied := callIntercept(t, requestInterceptRequest{Metadata: map[string]any{
+		"caller_scope": scopeA, "selected_auth_id": "gemini:apikey:new-id",
 	}})
-	if allowed.Terminate {
-		t.Fatalf("transiently adopted profile was rejected after auth: %#v", allowed)
+	if !denied.Terminate || denied.StatusCode != http.StatusForbidden {
+		t.Fatalf("after-auth allowed rotated profile: %#v", denied)
+	}
+	if strings.Contains(string(denied.ResponseBody), "new-id") {
+		t.Fatalf("403 leaked selected profile ID: %s", denied.ResponseBody)
 	}
 }
 

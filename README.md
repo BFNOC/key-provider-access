@@ -13,10 +13,17 @@ Profiles include both OAuth credentials and API-key-backed providers. Policies s
 - An empty `allow_profiles` list allows every profile not matched by `deny_profiles`.
 - `*` matches any number of characters and `?` matches one character.
 - The scheduler chooses only among allowed candidates and round-robins eligible candidates.
-- If CPA rotates every current profile ID and an allow list therefore has no direct match, the
-  scheduler transiently adopts the current non-denied candidate tier so requests continue. The
-  dashboard's catalog reconciliation then adds those IDs to the policy when the operator saves;
-  deny rules still win and this fallback never adopts a denied profile.
+- If no offered candidate matches a non-empty allow list, the request is denied. This covers an
+  allowed profile that is cooling down, disabled, outranked by another priority tier, or whose ID
+  changed because its API key, base URL, proxy URL, prefix, headers, or provider name was edited.
+  Other profiles are never adopted in its place.
+- Each denial is recorded in the status `runtime_warning` / `runtime_warning_detail` fields and shown
+  on the dashboard overview with the key fingerprint, provider, model, offered profile IDs (emails
+  masked), count, and time. It stays until the policy is saved or reloaded. The first denial for
+  each key, provider, and model combination is also written to the CPA process log.
+- The dashboard never adds new profiles to an allow list. A key whose allowed profiles have all
+  disappeared from the catalog keeps its stale rules, so it stays denied, and the dashboard flags it
+  until the operator picks the replacement profiles.
 - Legacy Gemini, Gemini Interactions, Claude, Codex, and xAI API-key profile IDs from CPA's
   pre-v7.2.146 format are matched against current candidates using transient attributes. This
   preserves existing allow/deny rules across CPA's ID-format change without persisting credentials

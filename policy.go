@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -61,14 +62,18 @@ type state struct {
 	hasValidPolicy bool
 	lastError      string
 	runtimeWarning string
-	revision       uint64
-	pickCursor     map[string]uint64
-	legacyAliases  map[string]map[string]string
-	autoAllowed    map[string]map[string]struct{}
+	// runtimeWarningDetail describes the latest denial for operators. It and
+	// denials persist until the next policy replace so a rotated or unavailable
+	// profile stays visible instead of being cleared by unrelated traffic.
+	runtimeWarningDetail string
+	denials              map[string]int
+	revision             uint64
+	pickCursor           map[string]uint64
+	legacyAliases        map[string]map[string]string
 }
 
 var (
-	globalState = state{snapshot: failClosedSnapshot(), pickCursor: make(map[string]uint64), legacyAliases: make(map[string]map[string]string), autoAllowed: make(map[string]map[string]struct{})}
+	globalState = state{snapshot: failClosedSnapshot(), pickCursor: make(map[string]uint64), legacyAliases: make(map[string]map[string]string), denials: make(map[string]int)}
 	mutationMu  sync.Mutex
 )
 
@@ -87,10 +92,11 @@ func (s *state) clear() {
 	s.hasValidPolicy = false
 	s.lastError = ""
 	s.runtimeWarning = ""
+	s.runtimeWarningDetail = ""
+	s.denials = make(map[string]int)
 	s.revision = 0
 	s.pickCursor = make(map[string]uint64)
 	s.legacyAliases = make(map[string]map[string]string)
-	s.autoAllowed = make(map[string]map[string]struct{})
 }
 
 func (s *state) current() (pluginConfig, policySnapshot, string, time.Time, uint32, string) {
@@ -115,9 +121,10 @@ func (s *state) replace(cfg pluginConfig, snapshot policySnapshot, source string
 	s.hasValidPolicy = true
 	s.lastError = ""
 	s.runtimeWarning = ""
+	s.runtimeWarningDetail = ""
+	s.denials = make(map[string]int)
 	s.revision++
 	s.legacyAliases = make(map[string]map[string]string)
-	s.autoAllowed = make(map[string]map[string]struct{})
 }
 
 func (s *state) policyRevision() uint64 {
@@ -150,30 +157,6 @@ func (s *state) legacyAlias(scope, current string) string {
 	return s.legacyAliases[strings.TrimSpace(scope)][strings.TrimSpace(current)]
 }
 
-func (s *state) rememberAutoAllowed(scope, profile string) {
-	scope = strings.TrimSpace(scope)
-	profile = strings.TrimSpace(profile)
-	if scope == "" || profile == "" {
-		return
-	}
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if s.autoAllowed == nil {
-		s.autoAllowed = make(map[string]map[string]struct{})
-	}
-	if s.autoAllowed[scope] == nil {
-		s.autoAllowed[scope] = make(map[string]struct{})
-	}
-	s.autoAllowed[scope][profile] = struct{}{}
-}
-
-func (s *state) isAutoAllowed(scope, profile string) bool {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	_, ok := s.autoAllowed[strings.TrimSpace(scope)][strings.TrimSpace(profile)]
-	return ok
-}
-
 func (s *state) setHostSchema(schema uint32) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -186,20 +169,55 @@ func (s *state) recordPolicyError(cause error) {
 	s.lastError = cause.Error()
 }
 
-func (s *state) recordRuntimeWarning(message string) {
-	message = strings.TrimSpace(message)
-	if message == "" {
-		return
+// maxTrackedDenials bounds denial bookkeeping because model names are caller
+// controlled; past the cap new combinations still update the warning but are
+// neither counted nor logged until the next policy replace.
+const maxTrackedDenials = 1024
+
+func (s *state) recordDenial(code, scope, provider, model string, offered []string) {
+	masked := make([]string, 0, len(offered))
+	for _, id := range offered {
+		masked = append(masked, maskProfileIdentity(strings.TrimSpace(id)))
 	}
+	key := scope + "\x00" + provider + "\x00" + model
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.runtimeWarning = message
+	if s.denials == nil {
+		s.denials = make(map[string]int)
+	}
+	count, tracked := s.denials[key]
+	if tracked || len(s.denials) < maxTrackedDenials {
+		count++
+		s.denials[key] = count
+	}
+	s.runtimeWarning = code
+	s.runtimeWarningDetail = fmt.Sprintf("key %s · provider %q · model %q · offered [%s] · count %d · last %s",
+		scopeFingerprint(scope), provider, model, strings.Join(masked, ", "), count, time.Now().UTC().Format(time.RFC3339))
+	if count == 1 {
+		log.Printf("%s: %s: %s", pluginID, code, s.runtimeWarningDetail)
+	}
 }
 
-func (s *state) clearRuntimeWarning() {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	s.runtimeWarning = ""
+// scopeFingerprint matches the dashboard's short caller-scope display.
+func scopeFingerprint(scope string) string {
+	if len(scope) < 16 {
+		return scope
+	}
+	return scope[:10] + "…" + scope[len(scope)-6:]
+}
+
+// maskProfileIdentity hides the local part of an email embedded in an OAuth
+// profile ID so denial logs carry no account identity.
+func maskProfileIdentity(id string) string {
+	at := strings.Index(id, "@")
+	if at <= 0 {
+		return id
+	}
+	start := strings.LastIndexAny(id[:at], ":/_ ") + 1
+	if at-start <= 1 {
+		return id
+	}
+	return id[:start+1] + "***" + id[at:]
 }
 
 func (s *state) failClosedOrPreserve(cfg pluginConfig, schema uint32, cause error) {
