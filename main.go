@@ -130,10 +130,10 @@ func pluginRegistration() registration {
 	return registration{
 		SchemaVersion: registrationSchema,
 		Metadata: metadata{
-			Name:             "Key Provider Access",
+			Name:             "Key Provider ACL",
 			Version:          pluginVersion,
-			Author:           "local",
-			GitHubRepository: "https://github.com/LTbinglingfeng/key-model-access",
+			Author:           "BFNOC",
+			GitHubRepository: "https://github.com/BFNOC/key-provider-acl",
 			Logo:             "",
 			ConfigFields: []configField{
 				{Name: "policy_file", Type: "string", Description: "Optional strict YAML or TOML v2 policy document. The Web UI initializes a default plugin-owned config.toml when omitted."},

@@ -55,7 +55,7 @@ func TestSettingsPageEmbedsAssetsWithNonceCSP(t *testing.T) {
 		"/v0/management/auth-files",
 		"/v0/management/openai-compatibility",
 		"/initialize-storage",
-		"/v0/management/plugins/key-provider-access/config",
+		"/v0/management/plugins/key-provider-acl/config",
 		"plugins_dir",
 		"cli-proxy-auth",
 		"cli-proxy-theme",

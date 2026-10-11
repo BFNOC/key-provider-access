@@ -2,12 +2,12 @@
   "schema_version": 1,
   "plugins": [
     {
-      "id": "key-provider-access",
-      "name": "Key Provider Access (BFNOC fork)",
-      "description": "Per-CPA-key allow and deny policies for upstream profiles. Fork with CPAMP enc::v2 session support.",
+      "id": "key-provider-acl",
+      "name": "Key Provider ACL",
+      "description": "Per-CPA-key allow and deny rules for upstream profiles with fail-closed allow lists and CPAMP enc::v2 session support. Fork of key-provider-access.",
       "author": "BFNOC",
-      "repository": "https://github.com/BFNOC/key-provider-access",
-      "homepage": "https://github.com/BFNOC/key-provider-access",
+      "repository": "https://github.com/BFNOC/key-provider-acl",
+      "homepage": "https://github.com/BFNOC/key-provider-acl",
       "license": "MIT",
       "tags": ["Management", "Auth", "Security", "Scheduler"]
     }

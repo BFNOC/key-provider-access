@@ -2,12 +2,12 @@
   "use strict";
 
   const PATHS = {
-    status: "/v0/management/plugins/key-provider-access/status",
-    policies: "/v0/management/plugins/key-provider-access/policies",
-    reload: "/v0/management/plugins/key-provider-access/reload",
-    initializeStorage: "/v0/management/plugins/key-provider-access/initialize-storage",
+    status: "/v0/management/plugins/key-provider-acl/status",
+    policies: "/v0/management/plugins/key-provider-acl/policies",
+    reload: "/v0/management/plugins/key-provider-acl/reload",
+    initializeStorage: "/v0/management/plugins/key-provider-acl/initialize-storage",
     pluginList: "/v0/management/plugins",
-    pluginConfig: "/v0/management/plugins/key-provider-access/config",
+    pluginConfig: "/v0/management/plugins/key-provider-acl/config",
     apiKeys: "/v0/management/api-keys",
     authFiles: "/v0/management/auth-files",
     geminiKeys: "/v0/management/gemini-api-key",
@@ -77,7 +77,7 @@
     ["正在只读获取 CPAMC 当前连接信息，无需再次输入 Management Key。", "Reading the current CPAMC connection in read-only mode. No second Management Key is required."],
     ["重新读取会话", "Read session again"],
     ["插件只读取 CPAMC 已保存的同源会话，不会复制或再次持久化 Management Key。", "The plugin only reads the saved same-origin CPAMC session; it never copies or persists the Management Key again."],
-    ["上游配置权限", "Key Provider Access"],
+    ["上游配置权限", "Key Provider ACL"],
     ["现有 Key 的上游配置访问策略", "Provider access policies for existing CPA keys"],
     ["策略导航", "Policy navigation"],
     ["只读来源", "Read-only source"],

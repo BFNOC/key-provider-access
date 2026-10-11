@@ -1,14 +1,14 @@
-# CPA Key Provider Access
+# CPA Key Provider ACL
 
 English · [简体中文](README.zh-CN.md)
 
-`key-provider-access` is a local CLIProxyAPI plugin derived from the layout and management UI of `key-model-access` v0.1.3. It keeps CPA's built-in downstream API-key authentication and applies a per-key allow/deny policy to upstream credential profiles instead of model names.
+`key-provider-acl` is a local CLIProxyAPI plugin derived from the layout and management UI of `key-model-access` v0.1.3. It keeps CPA's built-in downstream API-key authentication and applies a per-key allow/deny policy to upstream credential profiles instead of model names.
 
 Profiles include both OAuth credentials and API-key-backed providers. Policies store CPA's stable auth IDs, never OAuth tokens or upstream API keys.
 
 ## About this fork
 
-This fork of [GLGDLY/key-provider-access](https://github.com/GLGDLY/key-provider-access) adds:
+This fork of [GLGDLY/key-provider-access](https://github.com/GLGDLY/key-provider-access) is published under its own plugin ID, `key-provider-acl`, and adds:
 
 - Reading CPA Manager Plus `enc::v2` browser sessions, so the dashboard works from CPAMP Full Mode and the CPAMP lightweight panel.
 - Fail-closed allow lists: a key is never routed to a profile outside its allow list, even when its allowed profile is unavailable or its ID changed.
@@ -22,10 +22,18 @@ Add this fork's registry as a plugin store source in the CPA config:
 ```yaml
 plugins:
   store-sources:
-    - "https://raw.githubusercontent.com/BFNOC/key-provider-access/main/registry.json"
+    - "https://raw.githubusercontent.com/BFNOC/key-provider-acl/main/registry.json"
 ```
 
-Then install `key-provider-access` from the BFNOC source in the plugin store. CPA refuses to switch an installed plugin to another store source, so uninstall a copy installed from the official store first. Back up `plugins/key-provider-access/config.toml` before uninstalling; the dashboard reuses an existing file when it initializes storage.
+Then install `key-provider-acl` from that source in the plugin store.
+
+### Migrating from key-provider-access
+
+`key-provider-acl` and `key-provider-access` must not be enabled together: only one scheduler plugin runs, while both after-auth checks would enforce separate policies.
+
+1. Copy `plugins/key-provider-access/config.toml` to `plugins/key-provider-acl/config.toml` if you have existing policies. The policy format is unchanged.
+2. Uninstall `key-provider-access`.
+3. Install `key-provider-acl` and open its dashboard. Initializing storage reuses the copied file.
 
 ## Behavior
 
@@ -70,7 +78,7 @@ plugins:
   enabled: true
   dir: "plugins"
   configs:
-    key-provider-access:
+    key-provider-acl:
       enabled: true
       priority: 100
       version: 2
@@ -80,7 +88,7 @@ plugins:
 The Web UI is available at:
 
 ```text
-/v0/resource/plugins/key-provider-access/settings
+/v0/resource/plugins/key-provider-acl/settings
 ```
 
 It reuses the same-origin CPAMC or CPAMP management session (`enc::v1` and `enc::v2` storage), reads downstream CPA keys to derive caller scopes, and builds a profile catalog from CPA's read-only auth/config management endpoints. Provider secrets are used only transiently to reproduce CPA's stable auth IDs and are not written to plugin state, DOM, browser storage, or URLs.
@@ -89,7 +97,7 @@ The panel identifies each downstream key with a masked head-and-tail display; th
 
 Allow and deny profile choices are visually dimmed when they overlap, but remain clickable: choosing one removes the conflicting rule from the opposite side. Clicking an individual profile while `*` is active expands the wildcard into explicit current profiles with that profile excluded.
 
-On first use, the UI creates `plugins/key-provider-access/config.toml` and patches only this plugin's `policy_file` setting. Policy updates use revision ETags and atomic file replacement.
+On first use, the UI creates `plugins/key-provider-acl/config.toml` and patches only this plugin's `policy_file` setting. Policy updates use revision ETags and atomic file replacement.
 
 ## Policy schema
 
@@ -111,13 +119,13 @@ make check
 make build
 ```
 
-The Linux amd64 output is `dist/key-provider-access.so`. Install it as `plugins/linux/amd64/key-provider-access-v0.1.0.so` (or the unsuffixed name) and enable the matching `key-provider-access` config entry.
+The Linux amd64 output is `dist/key-provider-acl.so`. Install it as `plugins/linux/amd64/key-provider-acl-v0.1.0.so` (or the unsuffixed name) and enable the matching `key-provider-acl` config entry.
 
 ## Management API
 
-- `GET /v0/management/plugins/key-provider-access/status`
-- `GET/PUT /v0/management/plugins/key-provider-access/policies`
-- `POST /v0/management/plugins/key-provider-access/reload`
-- `POST /v0/management/plugins/key-provider-access/initialize-storage`
+- `GET /v0/management/plugins/key-provider-acl/status`
+- `GET/PUT /v0/management/plugins/key-provider-acl/policies`
+- `POST /v0/management/plugins/key-provider-acl/reload`
+- `POST /v0/management/plugins/key-provider-acl/initialize-storage`
 
 All routes use CPA management authentication. Status output never includes caller scopes or credentials.

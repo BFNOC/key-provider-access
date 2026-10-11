@@ -9,7 +9,7 @@ import (
 const (
 	abiVersion    uint32 = 1
 	schemaVersion uint32 = 2
-	pluginID             = "key-provider-access"
+	pluginID             = "key-provider-acl"
 )
 
 var pluginVersion = "0.0.5"

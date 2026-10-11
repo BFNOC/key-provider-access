@@ -15,11 +15,11 @@ import (
 )
 
 const (
-	policiesPath          = "/v0/management/plugins/key-provider-access/policies"
-	statusPath            = "/v0/management/plugins/key-provider-access/status"
-	reloadPath            = "/v0/management/plugins/key-provider-access/reload"
-	initializeStoragePath = "/v0/management/plugins/key-provider-access/initialize-storage"
-	settingsResourcePath  = "/v0/resource/plugins/key-provider-access/settings"
+	policiesPath          = "/v0/management/plugins/key-provider-acl/policies"
+	statusPath            = "/v0/management/plugins/key-provider-acl/status"
+	reloadPath            = "/v0/management/plugins/key-provider-acl/reload"
+	initializeStoragePath = "/v0/management/plugins/key-provider-acl/initialize-storage"
+	settingsResourcePath  = "/v0/resource/plugins/key-provider-acl/settings"
 	profileMatchWarning   = "profile_match_failed"
 	selectedDeniedWarning = "selected_profile_denied"
 	legacyUnverified      = "legacy_rule_unverified"
@@ -144,7 +144,7 @@ func terminatedPolicyResponse(status int, message string) ([]byte, error) {
 func managementRegistration() managementRegistrationResponse {
 	return managementRegistrationResponse{
 		Routes: []managementRoute{
-			{Method: http.MethodGet, Path: statusPath, Description: "Show key-provider-access status without exposing API keys or caller scopes."},
+			{Method: http.MethodGet, Path: statusPath, Description: "Show key-provider-acl status without exposing API keys or caller scopes."},
 			{Method: http.MethodGet, Path: policiesPath, Description: "List caller-scope profile policies."},
 			{Method: http.MethodPut, Path: policiesPath, Description: "Replace all caller-scope profile policies."},
 			{Method: http.MethodPost, Path: reloadPath, Description: "Reload policies from policy_file."},
@@ -152,7 +152,7 @@ func managementRegistration() managementRegistrationResponse {
 		},
 		Resources: []resourceRoute{{
 			Path:        "/settings",
-			Menu:        "Key Provider Access",
+			Menu:        "Key Provider ACL",
 			Description: "Manage per-key profile access policies in a browser.",
 		}},
 	}
@@ -306,7 +306,7 @@ func managementInitializeStorage(body []byte) ([]byte, error) {
 	}
 	pluginsDir = filepath.Clean(pluginsDir)
 	if !pluginBinaryExists(pluginsDir) {
-		return managementJSON(http.StatusUnprocessableEntity, map[string]any{"error": "plugins_dir does not contain the installed key-provider-access binary"})
+		return managementJSON(http.StatusUnprocessableEntity, map[string]any{"error": "plugins_dir does not contain the installed key-provider-acl binary"})
 	}
 	policyDir := filepath.Join(pluginsDir, pluginID)
 	if info, errStat := os.Lstat(policyDir); errStat == nil {
