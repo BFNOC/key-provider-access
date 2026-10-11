@@ -31,12 +31,12 @@ func interceptRequest(raw []byte, afterAuth bool) ([]byte, error) {
 	}
 	_, snapshot, _, _, _, _ := globalState.current()
 	if snapshot.BlockAll {
-		return terminatedPolicyResponse(http.StatusForbidden, "profile access policy is unavailable", "")
+		return terminatedPolicyResponse(http.StatusForbidden, "profile access policy is unavailable")
 	}
 
 	scope, hasScope := callerScopeFromMetadata(req.Metadata)
 	if len(snapshot.ByCallerScope) > 0 && !hasScope {
-		return terminatedPolicyResponse(http.StatusForbidden, "profile access identity is unavailable", "")
+		return terminatedPolicyResponse(http.StatusForbidden, "profile access identity is unavailable")
 	}
 	if !hasScope {
 		return okEnvelope(requestInterceptResponse{})
@@ -51,13 +51,13 @@ func interceptRequest(raw []byte, afterAuth bool) ([]byte, error) {
 	profile, _ := req.Metadata["selected_auth_id"].(string)
 	profile = strings.TrimSpace(profile)
 	if profile == "" {
-		return terminatedPolicyResponse(http.StatusForbidden, "selected profile is unavailable for policy evaluation", "")
+		return terminatedPolicyResponse(http.StatusForbidden, "selected profile is unavailable for policy evaluation")
 	}
-	if !policyAllowsCandidateWithLegacy(policy, profile, "", globalState.legacyAlias(scope, profile)) && !globalState.isAutoAllowed(scope, profile) {
-		globalState.recordRuntimeWarning(selectedDeniedWarning)
-		return terminatedPolicyResponse(http.StatusForbidden, "profile is not allowed for this API key", profile)
+	if !policyAllowsCandidateWithLegacy(policy, profile, "", globalState.legacyAlias(scope, profile)) {
+		globalState.recordDenial(selectedDeniedWarning, scope, "", req.Model, []string{profile})
+		// The selected profile ID stays out of the downstream body; operators see it in status and logs.
+		return terminatedPolicyResponse(http.StatusForbidden, "profile is not allowed for this API key")
 	}
-	globalState.clearRuntimeWarning()
 	return okEnvelope(requestInterceptResponse{})
 }
 
@@ -86,27 +86,21 @@ func pickProfile(raw []byte) ([]byte, error) {
 			globalState.rememberLegacyAlias(scope, candidate.ID, legacyAPIKeyProfileID(candidate))
 		}
 	}
-	if len(eligible) == 0 && len(policy.AllowProfiles) > 0 {
-		// CPA may rotate a profile ID while retaining the same provider. If the
-		// current tier has no allow-list match, adopt current non-denied profiles
-		// transiently so requests continue; the dashboard reconciler persists the
-		// new IDs after the operator reviews and saves the policy.
-		for _, candidate := range req.Candidates {
-			if candidate.ID == "" || !policyAllowsCandidateWithLegacies(runtimePolicy{DenyProfiles: policy.DenyProfiles}, candidate.ID, candidate.Provider, []string{legacyAPIKeyProfileID(candidate)}) {
-				continue
-			}
-			eligible = append(eligible, candidate)
-			globalState.rememberAutoAllowed(scope, candidate.ID)
-		}
-	}
-	if len(eligible) == 0 {
-		globalState.recordRuntimeWarning(profileMatchWarning)
-		return errorEnvelope("profile_access_denied", "no allowed upstream profile is available for this API key", http.StatusForbidden), nil
-	}
-	globalState.clearRuntimeWarning()
 	provider := req.Provider
 	if provider == "" {
 		provider = strings.Join(req.Providers, ",")
+	}
+	// No allow-list match fails closed. Adopting other candidates here would let a
+	// key reach any non-denied profile whenever its allowed profile is cooling
+	// down, disabled, outranked, or has a rotated ID. The denial stays visible in
+	// status until the operator saves or reloads the policy.
+	if len(eligible) == 0 {
+		offered := make([]string, 0, len(req.Candidates))
+		for _, candidate := range req.Candidates {
+			offered = append(offered, candidate.ID)
+		}
+		globalState.recordDenial(profileMatchWarning, scope, provider, req.Model, offered)
+		return errorEnvelope("profile_access_denied", "no allowed upstream profile is available for this API key", http.StatusForbidden), nil
 	}
 	return okEnvelope(schedulerPickResponse{
 		AuthID:  globalState.nextProfile(scope, provider, req.Model, eligible),
@@ -123,15 +117,11 @@ func callerScopeFromMetadata(metadata map[string]any) (string, bool) {
 	return scope, validSHA256(scope)
 }
 
-func terminatedPolicyResponse(status int, message, profile string) ([]byte, error) {
-	details := map[string]any{
+func terminatedPolicyResponse(status int, message string) ([]byte, error) {
+	body, err := json.Marshal(map[string]any{"error": map[string]any{
 		"type":    "profile_access_denied",
 		"message": message,
-	}
-	if profile != "" {
-		details["profile"] = profile
-	}
-	body, err := json.Marshal(map[string]any{"error": details})
+	}})
 	if err != nil {
 		return nil, err
 	}
@@ -189,6 +179,7 @@ func managementStatus() ([]byte, error) {
 	cfg, snapshot, source, updatedAt, hostSchema, lastError, revision := globalState.currentWithRevision()
 	globalState.mu.RLock()
 	runtimeWarning := globalState.runtimeWarning
+	runtimeWarningDetail := globalState.runtimeWarningDetail
 	globalState.mu.RUnlock()
 	return managementJSON(http.StatusOK, map[string]any{
 		"plugin":                  pluginID,
@@ -200,6 +191,7 @@ func managementStatus() ([]byte, error) {
 		"unconfigured_key_action": "allow",
 		"last_error":              lastError,
 		"runtime_warning":         runtimeWarning,
+		"runtime_warning_detail":  runtimeWarningDetail,
 		"policy_count":            len(snapshot.ByCallerScope),
 		"revision":                revision,
 		"policy_file":             cfg.PolicyFile,

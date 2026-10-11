@@ -39,6 +39,7 @@ import "C"
 import (
 	"encoding/json"
 	"fmt"
+	"math"
 	"unsafe"
 )
 
@@ -67,6 +68,12 @@ func cliproxyPluginCall(method *C.char, request *C.uint8_t, requestLen C.size_t,
 		return 1
 	}
 
+	// C.GoBytes takes a C.int; a larger length would wrap negative and panic
+	// inside an exported function, aborting the host process.
+	if requestLen > C.size_t(math.MaxInt32) {
+		writeResponse(response, errorEnvelope("request_too_large", "request exceeds 2 GiB", 0))
+		return 1
+	}
 	var requestBytes []byte
 	if request != nil && requestLen > 0 {
 		requestBytes = C.GoBytes(unsafe.Pointer(request), C.int(requestLen))
