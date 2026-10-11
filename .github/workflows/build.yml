@@ -11,7 +11,7 @@ permissions:
   contents: read
 
 env:
-  PLUGIN_NAME: key-provider-access
+  PLUGIN_NAME: key-provider-acl
 
 jobs:
   test:

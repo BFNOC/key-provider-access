@@ -537,7 +537,7 @@ func TestManagementInitializeStorageRejectsUnverifiedDirectory(t *testing.T) {
 		t.Fatal(err)
 	}
 	response := decodeManagementResponse(t, raw)
-	if response.StatusCode != http.StatusUnprocessableEntity || !strings.Contains(string(response.Body), "installed key-provider-access binary") {
+	if response.StatusCode != http.StatusUnprocessableEntity || !strings.Contains(string(response.Body), "installed key-provider-acl binary") {
 		t.Fatalf("unverified plugins_dir response = %d %s", response.StatusCode, response.Body)
 	}
 }

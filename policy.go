@@ -612,7 +612,7 @@ func writePolicyFile(path string, document policyDocument) error {
 			return fmt.Errorf("create policy directory: %w", err)
 		}
 	}
-	temporary, err := os.CreateTemp(dir, ".key-provider-access-*.tmp")
+	temporary, err := os.CreateTemp(dir, ".key-provider-acl-*.tmp")
 	if err != nil {
 		return fmt.Errorf("create temporary policy file: %w", err)
 	}

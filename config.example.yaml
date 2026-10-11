@@ -7,7 +7,7 @@ plugins:
   enabled: true
   dir: "plugins"
   configs:
-    key-provider-access:
+    key-provider-acl:
       enabled: true
       priority: 100
 
@@ -17,10 +17,10 @@ plugins:
       policies: []
 
       # Persistence is initialized automatically the first time the Web UI opens:
-      # <plugins.dir>/key-provider-access/config.toml is created, then this plugin
+      # <plugins.dir>/key-provider-acl/config.toml is created, then this plugin
       # config is patched with policy_file through CPA's Management API.
       #
       # Optional explicit override (YAML and TOML are supported). The target must
       # already contain a valid v2 policy document; a missing/invalid explicit
       # policy_file fails closed. Relative paths use CLIProxyAPI's working directory.
-      # policy_file: "config/key-provider-access-policies.yaml"
+      # policy_file: "config/key-provider-acl-policies.yaml"

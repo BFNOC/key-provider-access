@@ -1,4 +1,4 @@
-module key-provider-access
+module key-provider-acl
 
 go 1.24.0
 

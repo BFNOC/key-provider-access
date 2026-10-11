@@ -1,14 +1,14 @@
-# CPA Key Provider Access
+# CPA Key Provider ACL
 
 [English](README.md) · 简体中文
 
-`key-provider-access` 是一个本地 CLIProxyAPI 插件，布局和管理界面源自 `key-model-access` v0.1.3。插件沿用 CPA 内置的下游 API Key 认证，按 Key 对上游凭证配置（以下简称「上游配置」）设置允许和拒绝规则，而不是按模型名限制。
+`key-provider-acl` 是一个本地 CLIProxyAPI 插件，布局和管理界面源自 `key-model-access` v0.1.3。插件沿用 CPA 内置的下游 API Key 认证，按 Key 对上游凭证配置（以下简称「上游配置」）设置允许和拒绝规则，而不是按模型名限制。
 
 上游配置包括 OAuth 凭证和基于 API Key 的供应商。策略只保存 CPA 的稳定 auth ID，不保存 OAuth token 或上游 API Key。
 
 ## 关于此 fork
 
-此仓库 fork 自 [GLGDLY/key-provider-access](https://github.com/GLGDLY/key-provider-access)，新增以下改动：
+此仓库 fork 自 [GLGDLY/key-provider-access](https://github.com/GLGDLY/key-provider-access)，以独立的插件 ID `key-provider-acl` 发布，新增以下改动：
 
 - 支持读取 CPA Manager Plus 的 `enc::v2` 浏览器会话，设置页可以在 CPAMP 完整模式和 CPAMP 轻量面板下使用。
 - 白名单失败即关闭：即使允许的上游配置不可用或 ID 发生变化，Key 也不会被转到白名单之外的上游配置。
@@ -22,10 +22,18 @@
 ```yaml
 plugins:
   store-sources:
-    - "https://raw.githubusercontent.com/BFNOC/key-provider-access/main/registry.json"
+    - "https://raw.githubusercontent.com/BFNOC/key-provider-acl/main/registry.json"
 ```
 
-然后在插件商店中从 BFNOC 源安装 `key-provider-access`。CPA 不允许把已安装的插件切换到另一个商店源，因此如果已从官方商店安装，需要先卸载。卸载前先备份 `plugins/key-provider-access/config.toml`；设置页初始化存储时会沿用已有文件。
+然后在插件商店中从该源安装 `key-provider-acl`。
+
+### 从 key-provider-access 迁移
+
+`key-provider-acl` 和 `key-provider-access` 不能同时启用：调度器插件只有一个生效，但两者的 after-auth 检查会各自按不同的策略执行。
+
+1. 如果已有策略，把 `plugins/key-provider-access/config.toml` 复制为 `plugins/key-provider-acl/config.toml`。策略格式没有变化。
+2. 卸载 `key-provider-access`。
+3. 安装 `key-provider-acl` 并打开设置页。初始化存储时会沿用复制过来的文件。
 
 ## 行为
 
@@ -58,7 +66,7 @@ plugins:
   enabled: true
   dir: "plugins"
   configs:
-    key-provider-access:
+    key-provider-acl:
       enabled: true
       priority: 100
       version: 2
@@ -68,7 +76,7 @@ plugins:
 设置页地址：
 
 ```text
-/v0/resource/plugins/key-provider-access/settings
+/v0/resource/plugins/key-provider-acl/settings
 ```
 
 设置页复用同源的 CPAMC 或 CPAMP 管理会话（支持 `enc::v1` 和 `enc::v2` 存储格式），读取 CPA 的下游 Key 来计算 caller scope，并通过 CPA 只读的 auth 和配置管理接口构建上游配置目录。供应商密钥只在内存中临时用于复现 CPA 的稳定 auth ID，不会写入插件状态、DOM、浏览器存储或 URL。
@@ -77,7 +85,7 @@ plugins:
 
 允许和拒绝的选项发生重叠时会显示为灰色，但仍可点击：选中其中一项，会从另一侧移除冲突的规则。在 `*` 生效时点击单个上游配置，会把通配符展开为当前目录中的具体上游配置，并排除被点击的那一项。
 
-首次使用时，设置页会创建 `plugins/key-provider-access/config.toml`，并且只修改本插件的 `policy_file` 设置。策略更新使用修订版本 ETag 和原子文件替换。
+首次使用时，设置页会创建 `plugins/key-provider-acl/config.toml`，并且只修改本插件的 `policy_file` 设置。策略更新使用修订版本 ETag 和原子文件替换。
 
 ## 策略格式
 
@@ -99,13 +107,13 @@ make check
 make build
 ```
 
-Linux amd64 的构建产物是 `dist/key-provider-access.so`。将其安装为 `plugins/linux/amd64/key-provider-access-v0.1.0.so`（或不带版本后缀的文件名），并启用对应的 `key-provider-access` 配置项。
+Linux amd64 的构建产物是 `dist/key-provider-acl.so`。将其安装为 `plugins/linux/amd64/key-provider-acl-v0.1.0.so`（或不带版本后缀的文件名），并启用对应的 `key-provider-acl` 配置项。
 
 ## 管理接口
 
-- `GET /v0/management/plugins/key-provider-access/status`
-- `GET/PUT /v0/management/plugins/key-provider-access/policies`
-- `POST /v0/management/plugins/key-provider-access/reload`
-- `POST /v0/management/plugins/key-provider-access/initialize-storage`
+- `GET /v0/management/plugins/key-provider-acl/status`
+- `GET/PUT /v0/management/plugins/key-provider-acl/policies`
+- `POST /v0/management/plugins/key-provider-acl/reload`
+- `POST /v0/management/plugins/key-provider-acl/initialize-storage`
 
 所有接口都使用 CPA 管理认证。状态输出不会包含 caller scope 或凭证。
